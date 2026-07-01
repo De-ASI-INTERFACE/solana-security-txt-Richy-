@@ -1,0 +1,91 @@
+name: security-txt verify
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'example-contract/src/lib.rs'
+      - 'SECURITY.md'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'example-contract/src/lib.rs'
+      - 'SECURITY.md'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify-security-txt:
+    name: Verify security.txt Fields
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-security-txt-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-security-txt-
+
+      - name: Install query-security-txt
+        run: cargo install query-security-txt --locked
+
+      - name: Build example contract (native, no BPF)
+        run: |
+          cd example-contract
+          cargo build --release 2>&1 || true
+
+      - name: Verify security.txt fields are present and non-placeholder
+        run: |
+          echo "=== Checking security.txt macro fields in lib.rs ==="
+          LIB=example-contract/src/lib.rs
+
+          # Assert required fields exist and are not placeholder values
+          check_field() {
+            FIELD=$1
+            PLACEHOLDER=$2
+            VALUE=$(grep -oP "(?<=${FIELD}: \")[^\"]+" $LIB || echo "")
+            if [ -z "$VALUE" ]; then
+              echo "ERROR: Field '${FIELD}' is missing or empty."
+              exit 1
+            fi
+            if [ "$VALUE" = "$PLACEHOLDER" ]; then
+              echo "ERROR: Field '${FIELD}' still contains placeholder value: $VALUE"
+              exit 1
+            fi
+            echo "OK: ${FIELD} = ${VALUE}"
+          }
+
+          check_field "name" "Example"
+          check_field "project_url" "http://example.com"
+          check_field "contacts" "email:example@example.com,link:https://example.com/security,discord:example#1234"
+          check_field "policy" "https://github.com/solana-labs/solana/blob/master/SECURITY.md"
+
+          echo "All required security.txt fields verified successfully."
+
+      - name: Assert SECURITY.md exists
+        run: |
+          if [ ! -f SECURITY.md ]; then
+            echo "ERROR: SECURITY.md not found at repo root. The policy field in security_txt! will resolve to a broken URL."
+            exit 1
+          fi
+          echo "OK: SECURITY.md exists."
+
+      - name: Assert SECURITY.md is non-empty
+        run: |
+          LINES=$(wc -l < SECURITY.md)
+          if [ "$LINES" -lt 10 ]; then
+            echo "ERROR: SECURITY.md appears to be empty or stub (< 10 lines)."
+            exit 1
+          fi
+          echo "OK: SECURITY.md has $LINES lines."
